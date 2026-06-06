@@ -6,6 +6,7 @@ from io import StringIO
 
 app = Flask(__name__)
 
+# In-memory storage: each event has start_time, end_time (None if still down)
 downtime_events = []
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -13,13 +14,14 @@ IST = timezone(timedelta(hours=5, minutes=30))
 def get_ist_timestamp():
     return datetime.now(IST).strftime("%Y-%m-%d %I:%M:%S %p")
 
+# Machine name mapping (spoken to display name)
 NAME_MAP = {
+    "cnc machine": "CNC Machine",  # Put longer/more specific first
     "cnc": "CNC Machine",
-    "cnc machine": "CNC Machine",
-    "lathe": "Lathe Machine",
     "lathe machine": "Lathe Machine",
-    "grinder": "Grinder",
+    "lathe": "Lathe Machine",
     "grinder machine": "Grinder",
+    "grinder": "Grinder",
     "machine 1": "CNC Machine",
     "machine 2": "Lathe Machine",
     "machine 3": "Grinder",
@@ -32,14 +34,16 @@ def extract_downtime_info(text):
     text_lower = text.lower()
     result = {"machine": None, "cause": "unknown"}
     
-    # First, find machine name/number
-    for key, display_name in NAME_MAP.items():
+    # Sort keys by length descending (longest first) to match "cnc machine" before "cnc"
+    sorted_keys = sorted(NAME_MAP.keys(), key=len, reverse=True)
+    
+    for key in sorted_keys:
         if key in text_lower:
-            result["machine"] = display_name
+            result["machine"] = NAME_MAP[key]
             # Extract remaining text as cause
             remaining = re.sub(rf'\b{re.escape(key)}\b', '', text_lower, flags=re.IGNORECASE).strip()
-            # Remove common stop words
-            remaining = re.sub(r'^(stopped|down|failed|issue|problem|band|off)\s*', '', remaining)
+            # Remove common stop words from beginning
+            remaining = re.sub(r'^(stopped|down|failed|issue|problem|band|off|is)\s*', '', remaining)
             if remaining:
                 result["cause"] = remaining[:100]
             break
@@ -76,18 +80,28 @@ def whatsapp_webhook():
     incoming_msg = request.values.get("Body", "").lower()
     extracted = extract_downtime_info(incoming_msg)
     if extracted["machine"]:
+        # Capture timestamp once to avoid mismatch
+        now = get_ist_timestamp()
         downtime_events.append({
             "machine": extracted["machine"],
             "cause": extracted["cause"],
-            "timestamp": get_ist_timestamp()
+            "start_time": now,
+            "end_time": None
         })
-        return f"✅ {extracted['machine']} downtime logged at {get_ist_timestamp()}. Cause: {extracted['cause']}"
+        return f"✅ {extracted['machine']} downtime logged at {now}. Cause: {extracted['cause']}"
     else:
         return "❌ Please say machine name or number, e.g., 'CNC machine stopped, power failure'"
 
 @app.route('/get_events')
 def get_events():
-    return jsonify({"events": downtime_events})
+    # Return only active events (end_time is None)
+    active_events = [e for e in downtime_events if e['end_time'] is None]
+    events_for_dashboard = [{
+        "machine": e["machine"],
+        "cause": e["cause"],
+        "timestamp": e["start_time"]
+    } for e in active_events]
+    return jsonify({"events": events_for_dashboard})
 
 @app.route('/reset')
 def reset():
@@ -101,22 +115,52 @@ def reset_machine():
     if not machine_name:
         return jsonify({"error": "Machine name required"}), 400
     global downtime_events
-    downtime_events = [e for e in downtime_events if e['machine'] != machine_name]
+    now = get_ist_timestamp()
+    # Find the first active event for this machine and set its end_time
+    for event in downtime_events:
+        if event['machine'] == machine_name and event['end_time'] is None:
+            event['end_time'] = now
+            break
     return jsonify({"status": f"Reset {machine_name}"})
 
 @app.route('/export')
 def export_csv():
     si = StringIO()
+    # Add UTF-8 BOM for correct ₹ symbol in Excel
+    si.write('\uFEFF')
     cw = csv.writer(si)
-    cw.writerow(["Timestamp", "Machine", "Cause", "Loss (₹/hour)"])
+    cw.writerow(["Start Time", "End Time", "Duration (minutes)", "Machine", "Cause", "Loss (₹/hour)", "Total Loss (₹)"])
     
     cost_map = {"CNC Machine": 8000, "Lathe Machine": 6000, "Grinder": 4000}
+    
     for event in downtime_events:
-        loss = cost_map.get(event['machine'], 0)
-        cw.writerow([event['timestamp'], event['machine'], event['cause'], loss])
+        machine = event['machine']
+        cause = event['cause']
+        start_str = event['start_time']
+        end_str = event['end_time'] if event['end_time'] else "Still ongoing"
+        
+        # Calculate duration in minutes
+        try:
+            start_dt = datetime.strptime(start_str, "%Y-%m-%d %I:%M:%S %p")
+            if event['end_time']:
+                end_dt = datetime.strptime(event['end_time'], "%Y-%m-%d %I:%M:%S %p")
+                duration_min = int((end_dt - start_dt).total_seconds() / 60)
+            else:
+                duration_min = "N/A"
+        except:
+            duration_min = "N/A"
+        
+        hourly_cost = cost_map.get(machine, 0)
+        if isinstance(duration_min, int) and duration_min >= 0:  # Allow 0 minutes
+            total_loss = round(hourly_cost * (duration_min / 60), 2)
+        else:
+            total_loss = "N/A"
+        
+        cw.writerow([start_str, end_str, duration_min, machine, cause, hourly_cost, total_loss])
     
     output = si.getvalue()
-    return Response(output, mimetype='text/csv', headers={"Content-Disposition": "attachment;filename=downtime_report.csv"})
+    return Response(output, mimetype='text/csv', 
+                    headers={"Content-Disposition": "attachment;filename=downtime_report.csv"})
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=8080)
