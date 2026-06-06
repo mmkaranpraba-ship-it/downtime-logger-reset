@@ -7,7 +7,7 @@
         * { box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', Roboto, Arial, sans-serif;
-            background: #1E3A8A;  /* Royal blue, matching dashboard */
+            background: #1E3A8A;
             color: white;
             padding: 20px;
         }
@@ -36,7 +36,7 @@
             font-size: 18px;
             font-family: monospace;
             margin: 20px 0;
-            background: #0f2b5e;  /* Slightly darker royal blue for the textarea */
+            background: #0f2b5e;
             color: white;
             border: 1px solid #00b894;
         }
@@ -47,23 +47,31 @@
         }
         button {
             flex: 1;
-            background: #00b894;
-            color: white;
-            border: none;
+            cursor: pointer;
+            position: relative;
+            z-index: 1;
             padding: 14px;
+            border: none;
             border-radius: 50px;
             font-size: 18px;
             font-weight: bold;
-            cursor: pointer;
             transition: 0.2s;
             box-shadow: 0 4px 10px rgba(0,0,0,0.3);
         }
-        button:active { transform: scale(0.98); }
+        button:active {
+            transform: scale(0.98);
+        }
         .speak-btn {
             background: #e67e22;
+            color: white;
         }
         .clear-btn {
             background: #d63031;
+            color: white;
+        }
+        .submit-btn {
+            background: #00b894;
+            color: white;
         }
         .status {
             background: rgba(0,0,0,0.6);
@@ -110,7 +118,7 @@
     <div class="button-group">
         <button id="speakBtn" class="speak-btn">🎤 SPEAK</button>
         <button id="clearBtn" class="clear-btn">🗑️ CLEAR</button>
-        <button id="submitBtn">✅ SUBMIT</button>
+        <button id="submitBtn" class="submit-btn">✅ SUBMIT</button>
     </div>
     
     <div class="status" id="statusMsg">📢 Ready – type, use examples, or tap SPEAK.</div>
@@ -220,7 +228,7 @@
         statusMsg.innerHTML = '📢 Cleared. Type or tap SPEAK.';
     });
     
-    submitBtn.addEventListener('click', () => {
+    submitBtn.addEventListener('click', async () => {
         const message = reportText.value.trim();
         if (!message) {
             statusMsg.innerHTML = '❌ Please enter a report.';
@@ -228,24 +236,27 @@
         }
         statusMsg.innerHTML = '📤 Sending...';
         submitBtn.disabled = true;
-        fetch('/whatsapp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: 'Body=' + encodeURIComponent(message)
-        })
-        .then(res => res.text())
-        .then(data => {
-            statusMsg.innerHTML = '✅ Sent! Dashboard will update.';
-            reportText.value = '';
-            setTimeout(() => {
-                submitBtn.disabled = false;
-                statusMsg.innerHTML = '📢 Ready.';
-            }, 2000);
-        })
-        .catch(err => {
-            statusMsg.innerHTML = '❌ Server error.';
+        try {
+            const response = await fetch('/whatsapp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'Body=' + encodeURIComponent(message)
+            });
+            const responseText = await response.text();
+            if (response.ok) {
+                statusMsg.innerHTML = '✅ ' + responseText;
+                reportText.value = '';
+                setTimeout(() => {
+                    statusMsg.innerHTML = '📢 Ready for next report.';
+                }, 2000);
+            } else {
+                statusMsg.innerHTML = '❌ Server error: ' + responseText;
+            }
+        } catch (err) {
+            statusMsg.innerHTML = '❌ Network error: ' + err.message;
+        } finally {
             submitBtn.disabled = false;
-        });
+        }
     });
 </script>
 </body>

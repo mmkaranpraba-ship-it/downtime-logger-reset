@@ -46,18 +46,33 @@
             font-size: 56px;
             font-weight: bold;
         }
+        .button-group {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-bottom: 25px;
+        }
+        button {
+            cursor: pointer;
+            position: relative;
+            z-index: 1;
+            padding: 14px 20px;
+            border: none;
+            border-radius: 50px;
+            font-size: 20px;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
         .global-reset-btn {
             background: #d63031;
             color: white;
-            border: none;
-            padding: 14px 20px;
-            font-size: 20px;
-            font-weight: bold;
-            border-radius: 50px;
-            cursor: pointer;
-            margin-bottom: 25px;
-            width: auto;
-            display: inline-block;
+        }
+        .export-btn {
+            background: #00b894;
+            color: white;
         }
         .machines-grid {
             display: grid;
@@ -114,7 +129,7 @@
             background: #ffaa33;
             color: #1a1a2e;
             border: none;
-            padding: 10px 12px;
+            padding: 12px;
             margin-top: 15px;
             border-radius: 40px;
             font-size: 16px;
@@ -122,9 +137,6 @@
             cursor: pointer;
             width: 100%;
             transition: 0.2s;
-        }
-        .machine-reset-btn:active {
-            transform: scale(0.96);
         }
         .footer {
             text-align: center;
@@ -147,8 +159,9 @@
         <div class="loss-amount" id="totalLoss">₹0</div>
     </div>
     
-    <div style="text-align: center;">
+    <div class="button-group">
         <button class="global-reset-btn" onclick="resetAllMachines()">🗑️ RESET ALL MACHINES</button>
+        <button class="export-btn" onclick="exportToExcel()">📊 EXPORT TO EXCEL</button>
     </div>
     
     <div class="machines-grid" id="machinesGrid"></div>
@@ -224,7 +237,10 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ machine: machineName })
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return response.json();
+            })
             .then(data => {
                 const machine = machines.find(m => m.displayName === machineName);
                 if (machine) {
@@ -234,7 +250,10 @@
                 }
                 updateDashboard();
             })
-            .catch(err => console.log("Reset machine error:", err));
+            .catch(err => {
+                console.error("Reset machine error:", err);
+                alert(`Failed to reset ${machineName}: ${err.message}`);
+            });
         }
         
         function loadDowntimeEvents() {
@@ -259,6 +278,25 @@
                     }
                 })
                 .catch(err => console.log("Server error:", err));
+        }
+        
+        function exportToExcel() {
+            fetch('/export')
+                .then(response => {
+                    if (!response.ok) throw new Error('Export failed');
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'downtime_report.csv';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                })
+                .catch(err => console.error('Export error:', err));
         }
         
         updateDashboard();
