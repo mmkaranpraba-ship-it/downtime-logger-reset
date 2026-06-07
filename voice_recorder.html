@@ -107,6 +107,10 @@
             color: #ddd;
             margin-top: 25px;
         }
+        .retry-btn {
+            background: #d63031;
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -142,6 +146,7 @@
     let listening = false;
     let timeoutId = null;
     
+    // ---------- Speech Recognition (unchanged from working version) ----------
     function stopRecognition() {
         if (recognition) {
             try { recognition.abort(); } catch(e) {}
@@ -228,14 +233,46 @@
         statusMsg.innerHTML = '📢 Cleared. Type or tap SPEAK.';
     });
     
+    // ---------- RELIABLE SUBMISSION WITH VERIFICATION ----------
+    // Function to fetch current events from server
+    async function fetchCurrentEvents() {
+        const response = await fetch('/get_events');
+        if (!response.ok) throw new Error('Failed to fetch events');
+        const data = await response.json();
+        return data.events || [];
+    }
+    
+    // Verify that a specific machine has a new event with a matching cause within the last few seconds
+    async function verifyEventAdded(machineName, expectedCause, startTime) {
+        const maxAttempts = 10;  // 10 attempts * 500ms = 5 seconds
+        for (let i = 0; i < maxAttempts; i++) {
+            await new Promise(resolve => setTimeout(resolve, 500)); // wait 0.5 sec between polls
+            const events = await fetchCurrentEvents();
+            // Look for event matching machine and cause, and timestamp after startTime
+            const found = events.some(e => 
+                e.machine === machineName && 
+                e.cause === expectedCause &&
+                new Date(e.timestamp) >= startTime
+            );
+            if (found) return true;
+        }
+        return false;
+    }
+    
     submitBtn.addEventListener('click', async () => {
         const message = reportText.value.trim();
         if (!message) {
             statusMsg.innerHTML = '❌ Please enter a report.';
             return;
         }
-        statusMsg.innerHTML = '📤 Sending...';
+        
+        // Disable button and show sending
         submitBtn.disabled = true;
+        const originalBtnText = submitBtn.innerText;
+        submitBtn.innerText = '⏳ SENDING...';
+        statusMsg.innerHTML = '📤 Sending report to server...';
+        
+        let serverResponse = null;
         try {
             const response = await fetch('/whatsapp', {
                 method: 'POST',
@@ -243,19 +280,71 @@
                 body: 'Body=' + encodeURIComponent(message)
             });
             const responseText = await response.text();
-            if (response.ok) {
-                statusMsg.innerHTML = '✅ ' + responseText;
+            serverResponse = responseText;
+            
+            if (!response.ok) {
+                throw new Error(`Server error: ${responseText}`);
+            }
+            
+            // Success – now verify the event appears in dashboard
+            statusMsg.innerHTML = '✅ Report accepted. Verifying dashboard update...';
+            
+            // Parse machine name from server response (format: "✅ CNC Machine downtime logged at ... Cause: ...")
+            const machineMatch = serverResponse.match(/✅ (.*?) downtime logged/);
+            const causeMatch = serverResponse.match(/Cause: (.*)$/);
+            const machineName = machineMatch ? machineMatch[1] : null;
+            const causeText = causeMatch ? causeMatch[1] : "unknown";
+            
+            if (!machineName) {
+                // Cannot verify, but at least server accepted
+                statusMsg.innerHTML = '✅ Report sent. Please check dashboard manually.';
                 reportText.value = '';
                 setTimeout(() => {
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = originalBtnText;
                     statusMsg.innerHTML = '📢 Ready for next report.';
-                }, 2000);
+                }, 3000);
+                return;
+            }
+            
+            const startTime = new Date(); // used for verification
+            const verified = await verifyEventAdded(machineName, causeText, startTime);
+            
+            if (verified) {
+                statusMsg.innerHTML = '✅ Dashboard updated! Event confirmed.';
+                reportText.value = '';
+                // Also force a refresh on any open dashboard (optional, but good)
+                // We can send a broadcast via localStorage if needed, but not required.
             } else {
-                statusMsg.innerHTML = '❌ Server error: ' + responseText;
+                statusMsg.innerHTML = '⚠️ Report sent but dashboard not yet updated. Please refresh dashboard manually or wait a few seconds.';
+                reportText.value = '';
             }
         } catch (err) {
-            statusMsg.innerHTML = '❌ Network error: ' + err.message;
+            statusMsg.innerHTML = `❌ FAILED: ${err.message}. Please check network and try again.`;
+            // Add a retry button
+            let retryBtn = document.getElementById('retryBtn');
+            if (!retryBtn) {
+                retryBtn = document.createElement('button');
+                retryBtn.id = 'retryBtn';
+                retryBtn.innerText = '🔄 RETRY LAST REPORT';
+                retryBtn.className = 'retry-btn';
+                retryBtn.style.marginTop = '10px';
+                retryBtn.style.width = '100%';
+                retryBtn.onclick = () => {
+                    retryBtn.remove();
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = originalBtnText;
+                    submitBtn.click(); // retry
+                };
+                document.querySelector('.container').appendChild(retryBtn);
+            }
         } finally {
-            submitBtn.disabled = false;
+            if (submitBtn.disabled && !document.getElementById('retryBtn')) {
+                setTimeout(() => {
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = originalBtnText;
+                }, 3000);
+            }
         }
     });
 </script>
